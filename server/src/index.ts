@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { drizzle } from "drizzle-orm/d1";
 import { issues } from "./db/schema";
-import { eq, gt, inArray } from "drizzle-orm";
+import { eq, gt } from "drizzle-orm";
 import { cors } from "hono/cors";
 
 type Bindings = {
@@ -25,7 +25,7 @@ app.use(
   "*",
   cors({
     origin: "http://localhost:3000",
-    allowMethods: ["POST", "GET", "OPTIONS"],
+    allowMethods: ["POST", "GET", "OPTIONS", "DELETE", "PATCH"],
     exposeHeaders: ["Content-Length", "X-Kuma-Revision"],
     allowHeaders: ["Content-Type", "Authorization"],
     maxAge: 600,

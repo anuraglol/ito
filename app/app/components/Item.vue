@@ -1,206 +1,31 @@
 <script setup lang="ts">
-import type { MutationRecord, Task } from "@/typings";
-import { useMutation, useQuery } from "@tanstack/vue-query";
-import { computed, onMounted, ref } from "vue";
-import { columnToStatusMap, initDB, loadLocalState, mutateLocal, statusToColumnMap } from "~/utils";
+import { useTaskBoard } from "~/composables/useTaskBoard";
 import CreateTaskModal from "./CreateTaskModal.vue";
 
-const localTasks = ref<Task[]>([]);
-const isOnline = ref(import.meta.client ? navigator.onLine : true);
-const pendingMutationsCount = ref(0);
-const isCreateModalOpen = ref(false);
-
-const pushMutation = useMutation({
-  mutationFn: async (mutations: MutationRecord[]) => {
-    const res = await fetch("http://localhost:8787/sync/push", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ mutations }),
-    });
-    if (!res.ok) throw new Error("Push failed");
-    return res.json();
-  },
-  onSuccess: async () => {
-    const db = await initDB();
-    await db.clear("mutations");
-    const issuesList = await db.getAll("issues");
-    for (const issue of issuesList) {
-      if (issue._syncStatus === "pending") {
-        issue._syncStatus = "synced";
-        await db.put("issues", issue);
-      }
-    }
-    await loadLocalState(pendingMutationsCount, localTasks);
-    refetchPull();
-  },
-});
-
-const { refetch: refetchPull, isFetching: isPulling } = useQuery({
-  queryKey: ["issues-pull"],
-  queryFn: async () => {
-    if (!import.meta.client) return { issues: [], timestamp: "" };
-    const db = await initDB();
-    const lastPull = await db.get("meta", "lastPulledAt");
-    const lastPulledAt = lastPull ? lastPull.value : new Date(0).toISOString();
-
-    const res = await fetch(
-      `http://localhost:8787/sync/pull?lastPulledAt=${encodeURIComponent(lastPulledAt)}`,
-    );
-    if (!res.ok) throw new Error("Pull failed");
-    const data = await res.json();
-
-    const serverIssues: Task[] = data.issues;
-    const pendingMutations = await db.getAll("mutations");
-    const pendingIds = new Set(pendingMutations.map((m) => m.issueId));
-
-    for (const issue of serverIssues) {
-      if (!pendingIds.has(issue.id)) {
-        await db.put("issues", {
-          ...issue,
-          tag: issue.priority,
-          tagColor: issue.priority === "urgent" ? "error" : "primary",
-          _syncStatus: "synced",
-        });
-      }
-    }
-
-    await db.put("meta", { key: "lastPulledAt", value: data.timestamp });
-    await loadLocalState(pendingMutationsCount, localTasks);
-    return data;
-  },
-  refetchInterval: 15000,
-  enabled: computed(() => isOnline.value && import.meta.client),
-});
-
-const triggerSync = async () => {
-  if (!isOnline.value || !import.meta.client) return;
-  const db = await initDB();
-  const mutations = await db.getAll("mutations");
-  if (mutations.length > 0) {
-    pushMutation.mutate(mutations);
-  } else {
-    refetchPull();
-  }
-};
-
-const handleCreateTask = (payload: {
-  title: string;
-  description?: string;
-  status: "open" | "in_progress" | "resolved" | "closed";
-  priority: "low" | "medium" | "high" | "urgent";
-}) => {
-  const newId = crypto.randomUUID();
-  mutateLocal("create", newId, pendingMutationsCount, localTasks, isOnline, triggerSync, payload);
-};
-
-const columns = computed(() => {
-  const cols = [
-    { id: "backlog", title: "Backlog", icon: "i-lucide-archive", items: [] as Task[] },
-    { id: "in-progress", title: "In Progress", icon: "i-lucide-clock", items: [] as Task[] },
-    { id: "in-review", title: "In Review", icon: "i-lucide-eye", items: [] as Task[] },
-    { id: "done", title: "Done", icon: "i-lucide-check-circle", items: [] as Task[] },
-  ];
-
-  for (const task of localTasks.value) {
-    const colId = statusToColumnMap[task.status] || "backlog";
-    const targetCol = cols.find((c) => c.id === colId);
-    if (targetCol) targetCol.items.push(task);
-  }
-
-  return cols;
-});
-
-const draggedItem = ref<{ columnId: string; item: Task } | null>(null);
-const dragOverColumnId = ref<string | null>(null);
-const dropTargetIndex = ref<{ columnId: string; index: number } | null>(null);
-
-const onDeleteTask = (columnId: string, id: string) => {
-  mutateLocal("delete", id, pendingMutationsCount, localTasks, isOnline, triggerSync);
-};
-
-const onDragStart = (columnId: string, item: Task) => {
-  draggedItem.value = { columnId, item };
-};
-
-const onDragEnd = () => {
-  draggedItem.value = null;
-  dragOverColumnId.value = null;
-  dropTargetIndex.value = null;
-};
-
-const onColumnDragOver = (columnId: string, event: DragEvent) => {
-  dragOverColumnId.value = columnId;
-  const column = columns.value.find((c) => c.id === columnId);
-  if (column && column.items.length === 0) {
-    dropTargetIndex.value = { columnId, index: 0 };
-    return;
-  }
-
-  if (event.target === event.currentTarget) {
-    const target = event.currentTarget as HTMLElement;
-    const rect = target.getBoundingClientRect();
-    if (event.clientY > rect.bottom - 100) {
-      dropTargetIndex.value = { columnId, index: column?.items.length ?? 0 };
-    }
-  }
-};
-
-const onColumnDragLeave = (columnId: string, event: DragEvent) => {
-  const currentTarget = event.currentTarget as HTMLElement;
-  const relatedTarget = event.relatedTarget as Node | null;
-
-  if (!currentTarget.contains(relatedTarget)) {
-    if (dragOverColumnId.value === columnId) {
-      dragOverColumnId.value = null;
-      dropTargetIndex.value = null;
-    }
-  }
-};
-
-const onItemDragOver = (columnId: string, index: number, event: DragEvent) => {
-  event.stopPropagation();
-  dragOverColumnId.value = columnId;
-  const target = event.currentTarget as HTMLElement;
-  const rect = target.getBoundingClientRect();
-  const borderMidpoint = rect.top + rect.height / 2;
-  const insertIndex = event.clientY > borderMidpoint ? index + 1 : index;
-  dropTargetIndex.value = { columnId, index: insertIndex };
-};
-
-const onDrop = (targetColumnId: string) => {
-  if (!draggedItem.value) return;
-
-  const { item, columnId: sourceColumnId } = draggedItem.value;
-  if (sourceColumnId !== targetColumnId) {
-    const newStatus = columnToStatusMap[targetColumnId];
-    if (newStatus) {
-      mutateLocal("update", item.id, pendingMutationsCount, localTasks, isOnline, triggerSync, {
-        status: newStatus,
-      });
-    }
-  }
-
-  onDragEnd();
-};
+const {
+  isOnline,
+  pendingMutationsCount,
+  isCreateModalOpen,
+  isPulling,
+  pushMutation,
+  columns,
+  draggedItem,
+  dragOverColumnId,
+  dropTargetIndex,
+  triggerSync,
+  handleCreateTask,
+  onDeleteTask,
+  onDragStart,
+  onDragEnd,
+  onColumnDragOver,
+  onColumnDragLeave,
+  onItemDragOver,
+  onDrop,
+  initBoard,
+} = useTaskBoard();
 
 onMounted(async () => {
-  isOnline.value = navigator.onLine;
-  await loadLocalState(pendingMutationsCount, localTasks);
-
-  window.addEventListener("online", () => {
-    isOnline.value = true;
-    triggerSync();
-  });
-
-  window.addEventListener("offline", () => {
-    isOnline.value = false;
-  });
-
-  if (isOnline.value) {
-    triggerSync();
-  }
+  await initBoard();
 });
 </script>
 
@@ -257,7 +82,10 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 w-full items-start">
+    <div
+      class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 w-full items-start"
+      v-if="columns.some((column) => column.items.length > 0)"
+    >
       <div
         v-for="column in columns"
         :key="column.id"
@@ -380,7 +208,6 @@ onMounted(async () => {
         </div>
       </div>
     </div>
-
-    <CreateTaskModal v-model:open="isCreateModalOpen" @create="handleCreateTask" />
+    <div class="w-full py-32 text-center" v-else>Nothing to see here, yet.</div>
   </div>
 </template>
