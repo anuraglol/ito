@@ -1,88 +1,14 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
-import { openDB, type DBSchema, type IDBPDatabase } from "idb";
-import { useQuery, useMutation } from "@tanstack/vue-query";
+import type { MutationRecord, Task } from "@/typings";
+import { useMutation, useQuery } from "@tanstack/vue-query";
+import { computed, onMounted, ref } from "vue";
+import { columnToStatusMap, initDB, loadLocalState, mutateLocal, statusToColumnMap } from "~/utils";
 import CreateTaskModal from "./CreateTaskModal.vue";
-
-interface Task {
-  id: string;
-  title: string;
-  description?: string;
-  tag?: string;
-  tagColor?: string;
-  status: "open" | "in_progress" | "resolved" | "closed";
-  priority?: "low" | "medium" | "high" | "urgent";
-  createdAt: string;
-  updatedAt: string;
-  _syncStatus?: "synced" | "pending";
-}
-
-interface MutationRecord {
-  id: string;
-  type: "create" | "update" | "delete";
-  issueId: string;
-  data?: Partial<Task>;
-  timestamp: string;
-}
-
-interface KanbanDB extends DBSchema {
-  issues: {
-    key: string;
-    value: Task;
-  };
-  mutations: {
-    key: string;
-    value: MutationRecord;
-  };
-  meta: {
-    key: string;
-    value: { key: string; value: string };
-  };
-}
-
-const statusToColumnMap: Record<string, string> = {
-  open: "backlog",
-  in_progress: "in-progress",
-  resolved: "in-review",
-  closed: "done",
-};
-
-const columnToStatusMap: Record<string, "open" | "in_progress" | "resolved" | "closed"> = {
-  backlog: "open",
-  "in-progress": "in_progress",
-  "in-review": "resolved",
-  done: "closed",
-};
 
 const localTasks = ref<Task[]>([]);
 const isOnline = ref(import.meta.client ? navigator.onLine : true);
 const pendingMutationsCount = ref(0);
 const isCreateModalOpen = ref(false);
-
-const initDB = async (): Promise<IDBPDatabase<KanbanDB>> => {
-  return openDB<KanbanDB>("kanban-sync-db", 1, {
-    upgrade(db) {
-      if (!db.objectStoreNames.contains("issues")) {
-        db.createObjectStore("issues", { keyPath: "id" });
-      }
-      if (!db.objectStoreNames.contains("mutations")) {
-        db.createObjectStore("mutations", { keyPath: "id" });
-      }
-      if (!db.objectStoreNames.contains("meta")) {
-        db.createObjectStore("meta", { keyPath: "key" });
-      }
-    },
-  });
-};
-
-const loadLocalState = async () => {
-  if (!import.meta.client) return;
-  const db = await initDB();
-  const allIssues = await db.getAll("issues");
-  const allMutations = await db.getAll("mutations");
-  pendingMutationsCount.value = allMutations.length;
-  localTasks.value = allIssues;
-};
 
 const pushMutation = useMutation({
   mutationFn: async (mutations: MutationRecord[]) => {
@@ -106,7 +32,7 @@ const pushMutation = useMutation({
         await db.put("issues", issue);
       }
     }
-    await loadLocalState();
+    await loadLocalState(pendingMutationsCount, localTasks);
     refetchPull();
   },
 });
@@ -141,7 +67,7 @@ const { refetch: refetchPull, isFetching: isPulling } = useQuery({
     }
 
     await db.put("meta", { key: "lastPulledAt", value: data.timestamp });
-    await loadLocalState();
+    await loadLocalState(pendingMutationsCount, localTasks);
     return data;
   },
   refetchInterval: 15000,
@@ -159,58 +85,6 @@ const triggerSync = async () => {
   }
 };
 
-const mutateLocal = async (
-  type: "create" | "update" | "delete",
-  issueId: string,
-  data?: Partial<Task>,
-) => {
-  const db = await initDB();
-  const mutationId = crypto.randomUUID();
-  const mutation: MutationRecord = {
-    id: mutationId,
-    type,
-    issueId,
-    data,
-    timestamp: new Date().toISOString(),
-  };
-
-  await db.put("mutations", mutation);
-
-  if (type === "delete") {
-    await db.delete("issues", issueId);
-  } else if (type === "update" && data) {
-    const existing = await db.get("issues", issueId);
-    if (existing) {
-      await db.put("issues", {
-        ...existing,
-        ...data,
-        updatedAt: new Date().toISOString(),
-        _syncStatus: "pending",
-      });
-    }
-  } else if (type === "create" && data) {
-    const now = new Date().toISOString();
-    const newTask: Task = {
-      id: issueId,
-      title: data.title ?? "Untitled",
-      description: data.description,
-      status: data.status ?? "open",
-      priority: data.priority ?? "medium",
-      tag: data.priority ?? "medium",
-      tagColor: data.priority === "urgent" ? "error" : "primary",
-      createdAt: now,
-      updatedAt: now,
-      _syncStatus: "pending",
-    };
-    await db.put("issues", newTask);
-  }
-
-  await loadLocalState();
-  if (isOnline.value) {
-    triggerSync();
-  }
-};
-
 const handleCreateTask = (payload: {
   title: string;
   description?: string;
@@ -218,7 +92,7 @@ const handleCreateTask = (payload: {
   priority: "low" | "medium" | "high" | "urgent";
 }) => {
   const newId = crypto.randomUUID();
-  mutateLocal("create", newId, payload);
+  mutateLocal("create", newId, pendingMutationsCount, localTasks, isOnline, triggerSync, payload);
 };
 
 const columns = computed(() => {
@@ -243,7 +117,7 @@ const dragOverColumnId = ref<string | null>(null);
 const dropTargetIndex = ref<{ columnId: string; index: number } | null>(null);
 
 const onDeleteTask = (columnId: string, id: string) => {
-  mutateLocal("delete", id);
+  mutateLocal("delete", id, pendingMutationsCount, localTasks, isOnline, triggerSync);
 };
 
 const onDragStart = (columnId: string, item: Task) => {
@@ -302,7 +176,9 @@ const onDrop = (targetColumnId: string) => {
   if (sourceColumnId !== targetColumnId) {
     const newStatus = columnToStatusMap[targetColumnId];
     if (newStatus) {
-      mutateLocal("update", item.id, { status: newStatus });
+      mutateLocal("update", item.id, pendingMutationsCount, localTasks, isOnline, triggerSync, {
+        status: newStatus,
+      });
     }
   }
 
@@ -311,7 +187,7 @@ const onDrop = (targetColumnId: string) => {
 
 onMounted(async () => {
   isOnline.value = navigator.onLine;
-  await loadLocalState();
+  await loadLocalState(pendingMutationsCount, localTasks);
 
   window.addEventListener("online", () => {
     isOnline.value = true;
