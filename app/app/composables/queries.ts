@@ -10,7 +10,7 @@ export const pushMut = (
 ) => {
   return useMutation({
     mutationFn: async (mutations: MutationRecord[]) => {
-      const res = await fetch("http://localhost:8787/sync/push", {
+      const res = await fetch(BASE_API_URL + "/sync/push", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -61,7 +61,7 @@ export const getIssuesQuery = (
       const lastPulledAt = lastPull ? lastPull.value : new Date(0).toISOString();
 
       const res = await fetch(
-        `http://localhost:8787/sync/pull?lastPulledAt=${encodeURIComponent(lastPulledAt)}`,
+        BASE_API_URL + `/sync/pull?lastPulledAt=${encodeURIComponent(lastPulledAt)}`,
       );
       if (!res.ok) throw new Error("Pull failed");
       const data = await res.json();

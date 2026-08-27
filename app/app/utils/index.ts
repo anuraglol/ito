@@ -3,7 +3,7 @@ import type { KanbanDB, MutationRecord, Task } from "~/typings";
 
 export const BASE_API_URL = import.meta.dev
   ? "http://localhost:8787"
-  : "https://ito-server.imanuraglol.workers.dev/";
+  : "https://ito-server.imanuraglol.workers.dev";
 
 export const statusToColumnMap: Record<string, string> = {
   open: "backlog",
