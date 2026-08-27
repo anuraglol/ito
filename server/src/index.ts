@@ -25,7 +25,7 @@ const app = new Hono<{ Bindings: Bindings }>();
 app.use(
   "*",
   cors({
-    origin: ["http://localhost:3000", "https://ito.imanuraglol.workers.dev/"],
+    origin: ["http://localhost:3000", "https://ito.imanuraglol.workers.dev"],
     allowMethods: ["POST", "GET", "OPTIONS", "DELETE", "PATCH"],
     exposeHeaders: ["Content-Length", "X-Kuma-Revision"],
     allowHeaders: ["Content-Type", "Authorization"],
