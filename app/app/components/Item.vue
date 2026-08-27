@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { useTaskBoard } from "~/composables/useTaskBoard";
-import CreateTaskModal from "./CreateTaskModal.vue";
 
 const {
   isOnline,
@@ -44,18 +43,10 @@ onMounted(async () => {
             {{ isOnline ? "Online" : "Offline Mode" }}
           </span>
         </div>
-
-        <UButton
-          icon="i-lucide-plus"
-          size="xs"
-          color="primary"
-          variant="solid"
-          label="New Issue"
-          @click="isCreateModalOpen = true"
-        />
       </div>
 
       <div class="flex items-center gap-3">
+        <CreateTaskDialog />
         <div v-if="pendingMutationsCount > 0" class="flex items-center gap-1.5">
           <UIcon name="i-lucide-cloud-upload" class="w-4 h-4 text-amber-500 animate-pulse" />
           <span class="text-xs text-amber-600 dark:text-amber-400 font-medium">
@@ -208,6 +199,8 @@ onMounted(async () => {
         </div>
       </div>
     </div>
-    <div class="w-full py-32 text-center" v-else>Nothing to see here, yet.</div>
+    <div class="w-full py-32 text-center" v-else>
+      Nothing to see here, yet, but don't fret, we're loading it (i guess).
+    </div>
   </div>
 </template>
