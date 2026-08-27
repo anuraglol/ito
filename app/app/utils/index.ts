@@ -1,6 +1,10 @@
 import { openDB, type IDBPDatabase } from "idb";
 import type { KanbanDB, MutationRecord, Task } from "~/typings";
 
+export const BASE_API_URL = import.meta.dev
+  ? "http://localhost:8787"
+  : "https://ito-server.imanuraglol.workers.dev/";
+
 export const statusToColumnMap: Record<string, string> = {
   open: "backlog",
   in_progress: "in-progress",
@@ -88,7 +92,7 @@ export const mutateLocal = async (
     const newTask: Task = {
       id: issueId,
       title: data.title ?? "Untitled",
-      description: data.description ?? null,
+      description: data.description ?? undefined,
       status: data.status ?? "open",
       priority: data.priority ?? "medium",
       tag: data.priority ?? "medium",

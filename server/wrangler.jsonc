@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "server",
+  "name": "ito-server",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-25",
   "d1_databases": [
