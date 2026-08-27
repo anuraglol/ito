@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { drizzle } from "drizzle-orm/d1";
 import { issues } from "./db/schema";
-import { eq, gt } from "drizzle-orm";
+import { eq, gt, sql } from "drizzle-orm";
 import { cors } from "hono/cors";
 
 type Bindings = {
@@ -21,6 +21,7 @@ type SyncOperation = {
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
+
 app.use(
   "*",
   cors({
@@ -48,6 +49,7 @@ app.get("/sync/pull", async (c) => {
 app.post("/sync/push", async (c) => {
   const db = drizzle(c.env.DB);
   const { mutations } = await c.req.json<{ mutations: SyncOperation[] }>();
+  const now = new Date();
 
   for (const op of mutations) {
     if (op.type === "create" && op.data) {
@@ -59,8 +61,10 @@ app.post("/sync/push", async (c) => {
           description: op.data.description,
           status: op.data.status ?? "open",
           priority: op.data.priority ?? "medium",
-          createdAt: new Date(),
-          updatedAt: new Date(),
+          version: 1,
+          deletedAt: null,
+          createdAt: now,
+          updatedAt: now,
         })
         .onConflictDoUpdate({
           target: issues.id,
@@ -69,7 +73,9 @@ app.post("/sync/push", async (c) => {
             description: op.data.description,
             status: op.data.status ?? "open",
             priority: op.data.priority ?? "medium",
-            updatedAt: new Date(),
+            version: sql`${issues.version} + 1`,
+            deletedAt: null,
+            updatedAt: now,
           },
         });
     } else if (op.type === "update" && op.data) {
@@ -80,15 +86,23 @@ app.post("/sync/push", async (c) => {
           ...(op.data.description !== undefined ? { description: op.data.description } : {}),
           ...(op.data.status !== undefined ? { status: op.data.status } : {}),
           ...(op.data.priority !== undefined ? { priority: op.data.priority } : {}),
-          updatedAt: new Date(),
+          version: sql`${issues.version} + 1`,
+          updatedAt: now,
         })
         .where(eq(issues.id, op.issueId));
     } else if (op.type === "delete") {
-      await db.delete(issues).where(eq(issues.id, op.issueId));
+      await db
+        .update(issues)
+        .set({
+          deletedAt: now,
+          version: sql`${issues.version} + 1`,
+          updatedAt: now,
+        })
+        .where(eq(issues.id, op.issueId));
     }
   }
 
-  return c.json({ success: true, timestamp: new Date().toISOString() });
+  return c.json({ success: true, timestamp: now.toISOString() });
 });
 
 export default app;

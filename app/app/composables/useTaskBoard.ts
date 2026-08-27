@@ -74,6 +74,7 @@ export function useTaskBoard() {
     ];
 
     for (const task of localTasks.value) {
+      if (task.deletedAt) continue;
       const colId = statusToColumnMap[task.status] || "backlog";
       const targetCol = cols.find((c) => c.id === colId);
       if (targetCol) targetCol.items.push(task);

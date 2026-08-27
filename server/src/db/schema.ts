@@ -10,6 +10,10 @@ export const issues = sqliteTable("issues", {
   priority: text("priority", { enum: ["low", "medium", "high", "urgent"] })
     .default("medium")
     .notNull(),
+
+  version: integer("version").notNull().default(1),
+  deletedAt: integer("deleted_at", { mode: "timestamp" }),
+
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),

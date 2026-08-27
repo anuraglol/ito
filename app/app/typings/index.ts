@@ -11,6 +11,8 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   _syncStatus?: "synced" | "pending";
+  version: number;
+  deletedAt: string | null;
 }
 
 export interface MutationRecord {

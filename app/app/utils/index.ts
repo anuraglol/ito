@@ -33,12 +33,13 @@ export const initDB = async (): Promise<IDBPDatabase<KanbanDB>> => {
 
 export const loadLocalState = async (
   pendingMutationsCount: globalThis.Ref<number, number>,
-  localTasks: globalThis.Ref,
+  localTasks: globalThis.Ref<Task[]>,
 ) => {
   if (!import.meta.client) return;
   const db = await initDB();
   const allIssues = await db.getAll("issues");
   const allMutations = await db.getAll("mutations");
+
   pendingMutationsCount.value = allMutations.length;
   localTasks.value = allIssues;
 };
@@ -47,45 +48,53 @@ export const mutateLocal = async (
   type: "create" | "update" | "delete",
   issueId: string,
   pendingMutationsCount: globalThis.Ref<number, number>,
-  localTasks: globalThis.Ref,
-  isOnline: globalThis.Ref,
+  localTasks: globalThis.Ref<Task[]>,
+  isOnline: globalThis.Ref<boolean>,
   triggerSync: () => Promise<void>,
   data?: Partial<Task>,
 ) => {
   const db = await initDB();
+  const now = new Date().toISOString();
+  const existing = await db.get("issues", issueId);
+
   const mutationId = crypto.randomUUID();
   const mutation: MutationRecord = {
     id: mutationId,
     type,
     issueId,
-    data,
-    timestamp: new Date().toISOString(),
+    data: type === "delete" ? undefined : { ...data, updatedAt: now },
+    timestamp: now,
   };
 
   await db.put("mutations", mutation);
 
-  if (type === "delete") {
-    await db.delete("issues", issueId);
-  } else if (type === "update" && data) {
-    const existing = await db.get("issues", issueId);
-    if (existing) {
-      await db.put("issues", {
-        ...existing,
-        ...data,
-        updatedAt: new Date().toISOString(),
-        _syncStatus: "pending",
-      });
-    }
+  if (type === "delete" && existing) {
+    await db.put("issues", {
+      ...existing,
+      deletedAt: now,
+      version: (existing.version ?? 0) + 1,
+      updatedAt: now,
+      _syncStatus: "pending",
+    });
+  } else if (type === "update" && existing && data) {
+    await db.put("issues", {
+      ...existing,
+      ...data,
+      version: (existing.version ?? 0) + 1,
+      updatedAt: now,
+      _syncStatus: "pending",
+    });
   } else if (type === "create" && data) {
-    const now = new Date().toISOString();
     const newTask: Task = {
       id: issueId,
       title: data.title ?? "Untitled",
-      description: data.description,
+      description: data.description ?? null,
       status: data.status ?? "open",
       priority: data.priority ?? "medium",
       tag: data.priority ?? "medium",
       tagColor: data.priority === "urgent" ? "error" : "primary",
+      version: 1,
+      deletedAt: null,
       createdAt: now,
       updatedAt: now,
       _syncStatus: "pending",
@@ -95,6 +104,6 @@ export const mutateLocal = async (
 
   await loadLocalState(pendingMutationsCount, localTasks);
   if (isOnline.value) {
-    triggerSync();
+    await triggerSync();
   }
 };
