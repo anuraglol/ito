@@ -15,7 +15,7 @@ export class SyncRoom extends DurableObject {
     const url = new URL(request.url);
 
     if (url.pathname === "/sync/ws") {
-      if (request.headers.get("Upgrade") !== "websocket") {
+      if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
         return new Response("Expected WebSocket", { status: 426 });
       }
 

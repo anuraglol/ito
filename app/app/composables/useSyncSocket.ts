@@ -29,7 +29,9 @@ export function useSyncSocket(
       color: userInfo.color,
     });
 
-    const wsUrl = `${BASE_API_URL.replace(/^http/, "ws")}/sync/ws?${params.toString()}`;
+    const protocol = BASE_API_URL.startsWith("https") ? "wss" : "ws";
+    const hostUrl = BASE_API_URL.replace(/^https?:\/\//, "");
+    const wsUrl = `${protocol}://${hostUrl}/sync/ws?${params.toString()}`;
     socket = new WebSocket(wsUrl);
 
     socket.onopen = () => {

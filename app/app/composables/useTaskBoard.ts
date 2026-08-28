@@ -4,11 +4,27 @@ import { useSyncSocket } from "~/composables/useSyncSocket";
 import { columnToStatusMap, initDB, loadLocalState, mutateLocal, statusToColumnMap } from "~/utils";
 
 export function useTaskBoard() {
-  const currentUser = useState("current-user", () => ({
-    userId: crypto.randomUUID(),
-    name: `User-${Math.floor(Math.random() * 1000)}`,
-    color: `#${Math.floor(Math.random() * 16777215).toString(16)}`,
-  }));
+  const currentUser = useState("current-user", () => {
+    if (import.meta.client) {
+      const cached = localStorage.getItem("kanban_user");
+      if (cached) return JSON.parse(cached);
+
+      const newUser = {
+        userId: crypto.randomUUID(),
+        name: `User-${Math.floor(Math.random() * 1000)}`,
+        color: `#${Math.floor(Math.random() * 16777215)
+          .toString(16)
+          .padStart(6, "0")}`,
+      };
+      localStorage.setItem("kanban_user", JSON.stringify(newUser));
+      return newUser;
+    }
+    return {
+      userId: "ssr-user",
+      name: "Anonymous",
+      color: "#3b82f6",
+    };
+  });
 
   const isOnline = useState<boolean>("is-online", () =>
     import.meta.client ? navigator.onLine : true,
