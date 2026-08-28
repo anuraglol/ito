@@ -23,8 +23,8 @@
   },
   "migrations": [
     {
-      "tag": "v1",
-      "new_classes": ["SyncRoom"],
+      "tag": "v2",
+      "new_sqlite_classes": ["SyncRoom"],
     },
   ],
 }

@@ -35,6 +35,10 @@ app.use(
   }),
 );
 
+app.get("/", (c) => {
+  return c.text("hello hono");
+});
+
 app.get("/sync/ws", async (c) => {
   const roomId = c.req.query("roomId") ?? "global";
   const id = c.env.SYNC_ROOM.idFromName(roomId);
