@@ -1,5 +1,6 @@
 import type { Task } from "@/typings";
 import { getIssuesQuery, pushMut } from "~/composables/queries";
+import { useSyncSocket } from "~/composables/useSyncSocket";
 import { columnToStatusMap, initDB, loadLocalState, mutateLocal, statusToColumnMap } from "~/utils";
 
 export interface Column {
@@ -55,6 +56,11 @@ export function useTaskBoard() {
       refetchPull();
     }
   };
+
+  const { connect: connectSocket, disconnect: disconnectSocket } = useSyncSocket(
+    isOnline,
+    triggerSync,
+  );
 
   const handleCreateTask = (payload: CreateTaskPayload) => {
     const newId = crypto.randomUUID();
@@ -155,16 +161,23 @@ export function useTaskBoard() {
     window.addEventListener("online", () => {
       isOnline.value = true;
       triggerSync();
+      connectSocket();
     });
 
     window.addEventListener("offline", () => {
       isOnline.value = false;
+      disconnectSocket();
     });
 
     if (isOnline.value) {
       triggerSync();
+      connectSocket();
     }
   };
+
+  onUnmounted(() => {
+    disconnectSocket();
+  });
 
   return {
     localTasks,

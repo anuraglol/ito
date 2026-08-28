@@ -3,9 +3,13 @@ import { drizzle } from "drizzle-orm/d1";
 import { issues } from "./db/schema";
 import { eq, gt, sql } from "drizzle-orm";
 import { cors } from "hono/cors";
+import { SyncRoom } from "./sync-room";
+
+export { SyncRoom };
 
 type Bindings = {
   DB: D1Database;
+  SYNC_ROOM: DurableObjectNamespace<SyncRoom>;
 };
 
 type SyncOperation = {
@@ -35,6 +39,14 @@ app.use(
 
 app.get("/", (c) => {
   return c.text("hello hehe");
+});
+
+app.get("/sync/ws", async (c) => {
+  const roomId = c.req.query("roomId") ?? "global";
+  const id = c.env.SYNC_ROOM.idFromName(roomId);
+  const stub = c.env.SYNC_ROOM.get(id);
+
+  return stub.fetch(c.req.raw);
 });
 
 app.get("/sync/pull", async (c) => {
@@ -105,6 +117,19 @@ app.post("/sync/push", async (c) => {
         .where(eq(issues.id, op.issueId));
     }
   }
+
+  const roomId = c.req.query("roomId") ?? "global";
+  const id = c.env.SYNC_ROOM.idFromName(roomId);
+  const stub = c.env.SYNC_ROOM.get(id);
+
+  await stub.fetch("https://internal/broadcast", {
+    method: "POST",
+    body: JSON.stringify({
+      type: "sync_available",
+      timestamp: now.toISOString(),
+      mutations,
+    }),
+  });
 
   return c.json({ success: true, timestamp: now.toISOString() });
 });

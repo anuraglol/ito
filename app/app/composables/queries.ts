@@ -97,7 +97,7 @@ export const getIssuesQuery = (
       await loadLocalState(pendingMutationsCount, localTasks);
       return data;
     },
-    refetchInterval: 15000,
+    refetchInterval: false,
     enabled: computed(() => isOnline.value && import.meta.client),
   });
 };
