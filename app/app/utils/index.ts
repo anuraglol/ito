@@ -19,11 +19,20 @@ export const columnToStatusMap: Record<string, "open" | "in_progress" | "resolve
   done: "closed",
 };
 
-export const initDB = async (): Promise<IDBPDatabase<KanbanDB>> => {
-  return openDB<KanbanDB>("kanban-sync-db", 1, {
+const DB_NAME = "kanban_local_db";
+const DB_VERSION = 2;
+
+export async function initDB(): Promise<IDBPDatabase> {
+  return openDB(DB_NAME, DB_VERSION, {
     upgrade(db) {
       if (!db.objectStoreNames.contains("issues")) {
         db.createObjectStore("issues", { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains("comments")) {
+        db.createObjectStore("comments", { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains("activity")) {
+        db.createObjectStore("activity", { keyPath: "id" });
       }
       if (!db.objectStoreNames.contains("mutations")) {
         db.createObjectStore("mutations", { keyPath: "id" });
@@ -33,81 +42,80 @@ export const initDB = async (): Promise<IDBPDatabase<KanbanDB>> => {
       }
     },
   });
-};
+}
 
-export const loadLocalState = async (
-  pendingMutationsCount: globalThis.Ref<number, number>,
-  localTasks: globalThis.Ref<Task[]>,
-) => {
+export async function loadLocalState(pendingCount: Ref<number>, tasks: Ref<Task[]>) {
   if (!import.meta.client) return;
   const db = await initDB();
-  const allIssues = await db.getAll("issues");
-  const allMutations = await db.getAll("mutations");
+  const localMutations = await db.getAll("mutations");
+  pendingCount.value = localMutations.length;
 
-  pendingMutationsCount.value = allMutations.length;
-  localTasks.value = allIssues;
-};
+  const localTasks: Task[] = await db.getAll("issues");
+  tasks.value = localTasks.sort((a, b) => a.position - b.position);
+}
 
-export const mutateLocal = async (
+export async function mutateLocal(
   type: "create" | "update" | "delete",
-  issueId: string,
-  pendingMutationsCount: globalThis.Ref<number, number>,
-  localTasks: globalThis.Ref<Task[]>,
-  isOnline: globalThis.Ref<boolean>,
+  entity: "issue" | "comment",
+  targetId: string,
+  baseVersion: number,
+  userId: string,
+  pendingCount: Ref<number>,
+  tasks: Ref<Task[]>,
+  isOnline: Ref<boolean>,
   triggerSync: () => Promise<void>,
-  data?: Partial<Task>,
-) => {
+  data?: Record<string, any>,
+) {
   const db = await initDB();
-  const now = new Date().toISOString();
-  const existing = await db.get("issues", issueId);
-
-  const mutationId = crypto.randomUUID();
   const mutation: MutationRecord = {
-    id: mutationId,
+    id: crypto.randomUUID(),
     type,
-    issueId,
-    data: type === "delete" ? undefined : { ...data, updatedAt: now },
-    timestamp: now,
+    entity,
+    targetId,
+    baseVersion,
+    userId,
+    data,
+    createdAt: new Date().toISOString(),
   };
 
-  await db.put("mutations", mutation);
+  const tx = db.transaction([entity === "issue" ? "issues" : "comments", "mutations"], "readwrite");
+  await tx.objectStore("mutations").put(mutation);
 
-  if (type === "delete" && existing) {
-    await db.put("issues", {
-      ...existing,
-      deletedAt: now,
-      version: (existing.version ?? 0) + 1,
-      updatedAt: now,
-      _syncStatus: "pending",
-    });
-  } else if (type === "update" && existing && data) {
-    await db.put("issues", {
-      ...existing,
-      ...data,
-      version: (existing.version ?? 0) + 1,
-      updatedAt: now,
-      _syncStatus: "pending",
-    });
-  } else if (type === "create" && data) {
-    const newTask: Task = {
-      id: issueId,
-      title: data.title ?? "Untitled",
-      description: data.description ?? undefined,
-      status: data.status ?? "open",
-      priority: data.priority ?? "medium",
-      tag: data.priority ?? "medium",
-      tagColor: data.priority === "urgent" ? "error" : "primary",
-      version: 1,
-      deletedAt: null,
-      createdAt: now,
-      updatedAt: now,
-      _syncStatus: "pending",
-    };
-    await db.put("issues", newTask);
+  if (entity === "issue") {
+    const store = tx.objectStore("issues");
+    if (type === "delete") {
+      await store.delete(targetId);
+    } else if (type === "create") {
+      await store.put({
+        id: targetId,
+        version: baseVersion,
+        createdById: userId,
+        updatedById: userId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        position: data?.position ?? 0,
+        labels: data?.labels ?? [],
+        ...data,
+        _syncStatus: "pending",
+      });
+    } else if (type === "update") {
+      const existing = await store.get(targetId);
+      if (existing) {
+        await store.put({
+          ...existing,
+          ...data,
+          updatedById: userId,
+          updatedAt: new Date().toISOString(),
+          _syncStatus: "pending",
+        });
+      }
+    }
   }
 
-  await loadLocalState(pendingMutationsCount, localTasks);
+  await tx.done;
+  await loadLocalState(pendingCount, tasks);
+
   if (isOnline.value) {
-    await triggerSync();
+    triggerSync();
   }
-};
+}

@@ -3,39 +3,24 @@ import { getIssuesQuery, pushMut } from "~/composables/queries";
 import { useSyncSocket } from "~/composables/useSyncSocket";
 import { columnToStatusMap, initDB, loadLocalState, mutateLocal, statusToColumnMap } from "~/utils";
 
-export interface Column {
-  id: string;
-  title: string;
-  icon: string;
-  items: Task[];
-}
-
-export interface DraggedItemState {
-  columnId: string;
-  item: Task;
-}
-
-export interface DropTargetState {
-  columnId: string;
-  index: number;
-}
-
-export interface CreateTaskPayload {
-  title: string;
-  description?: string;
-  status: "open" | "in_progress" | "resolved" | "closed";
-  priority: "low" | "medium" | "high" | "urgent";
-}
-
 export function useTaskBoard() {
+  const currentUser = useState("current-user", () => ({
+    userId: crypto.randomUUID(),
+    name: `User-${Math.floor(Math.random() * 1000)}`,
+    color: `#${Math.floor(Math.random() * 16777215).toString(16)}`,
+  }));
+
   const isOnline = useState<boolean>("is-online", () =>
     import.meta.client ? navigator.onLine : true,
   );
   const pendingMutationsCount = useState<number>("pending-mutations-count", () => 0);
   const isCreateModalOpen = useState<boolean>("is-create-modal-open", () => false);
-  const draggedItem = useState<DraggedItemState | null>("dragged-item", () => null);
+  const draggedItem = useState<{ columnId: string; item: Task } | null>("dragged-item", () => null);
   const dragOverColumnId = useState<string | null>("drag-over-column-id", () => null);
-  const dropTargetIndex = useState<DropTargetState | null>("drop-target-index", () => null);
+  const dropTargetIndex = useState<{ columnId: string; index: number } | null>(
+    "drop-target-index",
+    () => null,
+  );
   const localTasks = useState<Task[]>("local-tasks", () => []);
 
   const { refetch: refetchPull, isFetching: isPulling } = getIssuesQuery(
@@ -57,26 +42,55 @@ export function useTaskBoard() {
     }
   };
 
-  const { connect: connectSocket, disconnect: disconnectSocket } = useSyncSocket(
-    isOnline,
-    triggerSync,
-  );
+  const {
+    connect: connectSocket,
+    disconnect: disconnectSocket,
+    emitCursor,
+    presences,
+  } = useSyncSocket(isOnline, triggerSync, currentUser.value);
 
-  const handleCreateTask = (payload: CreateTaskPayload) => {
+  const handleCreateTask = (payload: Partial<Task>) => {
     const newId = crypto.randomUUID();
-    mutateLocal("create", newId, pendingMutationsCount, localTasks, isOnline, triggerSync, payload);
+    const tasksInStatus = localTasks.value.filter((t) => t.status === (payload.status ?? "open"));
+    const maxPos = tasksInStatus.reduce((max, t) => Math.max(max, t.position || 0), 0);
+
+    mutateLocal(
+      "create",
+      "issue",
+      newId,
+      1,
+      currentUser.value.userId,
+      pendingMutationsCount,
+      localTasks,
+      isOnline,
+      triggerSync,
+      {
+        ...payload,
+        position: maxPos + 1000,
+      },
+    );
   };
 
-  const onDeleteTask = (columnId: string, id: string) => {
-    mutateLocal("delete", id, pendingMutationsCount, localTasks, isOnline, triggerSync);
+  const onDeleteTask = (id: string, version: number) => {
+    mutateLocal(
+      "delete",
+      "issue",
+      id,
+      version,
+      currentUser.value.userId,
+      pendingMutationsCount,
+      localTasks,
+      isOnline,
+      triggerSync,
+    );
   };
 
-  const columns = computed<Column[]>(() => {
-    const cols: Column[] = [
-      { id: "backlog", title: "Backlog", icon: "i-lucide-archive", items: [] },
-      { id: "in-progress", title: "In Progress", icon: "i-lucide-clock", items: [] },
-      { id: "in-review", title: "In Review", icon: "i-lucide-eye", items: [] },
-      { id: "done", title: "Done", icon: "i-lucide-check-circle", items: [] },
+  const columns = computed(() => {
+    const cols = [
+      { id: "backlog", title: "Backlog", icon: "i-lucide-archive", items: [] as Task[] },
+      { id: "in-progress", title: "In Progress", icon: "i-lucide-clock", items: [] as Task[] },
+      { id: "in-review", title: "In Review", icon: "i-lucide-eye", items: [] as Task[] },
+      { id: "done", title: "Done", icon: "i-lucide-check-circle", items: [] as Task[] },
     ];
 
     for (const task of localTasks.value) {
@@ -86,6 +100,7 @@ export function useTaskBoard() {
       if (targetCol) targetCol.items.push(task);
     }
 
+    cols.forEach((col) => col.items.sort((a, b) => a.position - b.position));
     return cols;
   });
 
@@ -141,17 +156,47 @@ export function useTaskBoard() {
   const onDrop = (targetColumnId: string) => {
     if (!draggedItem.value) return;
 
-    const { item, columnId: sourceColumnId } = draggedItem.value;
-    if (sourceColumnId !== targetColumnId) {
-      const newStatus = columnToStatusMap[targetColumnId];
-      if (newStatus) {
-        mutateLocal("update", item.id, pendingMutationsCount, localTasks, isOnline, triggerSync, {
-          status: newStatus,
-        });
-      }
+    const { item } = draggedItem.value;
+    const targetStatus = columnToStatusMap[targetColumnId] || "open";
+    const targetCol = columns.value.find((c) => c.id === targetColumnId);
+    const colItems = targetCol ? targetCol.items.filter((t) => t.id !== item.id) : [];
+
+    const targetIdx = dropTargetIndex.value?.index ?? colItems.length;
+    const prev = colItems[targetIdx - 1]?.position;
+    const next = colItems[targetIdx]?.position;
+
+    let newPos: number;
+    if (prev !== undefined && next !== undefined) {
+      newPos = (prev + next) / 2;
+    } else if (prev !== undefined) {
+      newPos = prev + 1000;
+    } else if (next !== undefined) {
+      newPos = next / 2;
+    } else {
+      newPos = 1000;
     }
 
+    mutateLocal(
+      "update",
+      "issue",
+      item.id,
+      item.version,
+      currentUser.value.userId,
+      pendingMutationsCount,
+      localTasks,
+      isOnline,
+      triggerSync,
+      {
+        status: targetStatus,
+        position: newPos,
+      },
+    );
+
     onDragEnd();
+  };
+
+  const handlePointerMove = (e: MouseEvent) => {
+    emitCursor(e.clientX, e.clientY);
   };
 
   const initBoard = async () => {
@@ -180,6 +225,8 @@ export function useTaskBoard() {
   });
 
   return {
+    currentUser,
+    presences,
     localTasks,
     isOnline,
     pendingMutationsCount,
@@ -199,6 +246,7 @@ export function useTaskBoard() {
     onColumnDragLeave,
     onItemDragOver,
     onDrop,
+    handlePointerMove,
     initBoard,
   };
 }

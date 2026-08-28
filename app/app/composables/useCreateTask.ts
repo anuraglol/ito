@@ -12,18 +12,24 @@ export interface CreateTaskInput {
 }
 
 export function useCreateTask() {
-  const { pendingMutationsCount, localTasks, isOnline, triggerSync } = useTaskBoard();
+  const { currentUser, pendingMutationsCount, localTasks, isOnline, triggerSync } = useTaskBoard();
 
   return useMutation({
     mutationFn: async (payload: CreateTaskInput) => {
       const issueId = crypto.randomUUID();
       const primaryTag = payload.tags?.[0] ?? payload.priority;
+      const targetStatus = payload.status ?? "open";
+
+      const tasksInStatus = localTasks.value.filter((t) => t.status === targetStatus);
+      const maxPos = tasksInStatus.reduce((max, t) => Math.max(max, t.position || 0), 0);
 
       const taskData: Partial<Task> = {
         title: payload.title,
         description: payload.description ?? undefined,
         priority: payload.priority,
-        status: payload.status ?? "open",
+        status: targetStatus,
+        labels: payload.tags ?? [],
+        position: maxPos + 1000,
         tag: primaryTag,
         tagColor:
           payload.priority === "high" || payload.priority === "urgent" ? "error" : "primary",
@@ -31,7 +37,10 @@ export function useCreateTask() {
 
       await mutateLocal(
         "create",
+        "issue",
         issueId,
+        1,
+        currentUser.value.userId,
         pendingMutationsCount,
         localTasks,
         isOnline,

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { drizzle } from "drizzle-orm/d1";
-import { issues } from "./db/schema";
-import { eq, gt, sql } from "drizzle-orm";
+import { issues, issueComments, activityLogs } from "./db/schema";
+import { eq, gt, sql, and } from "drizzle-orm";
 import { cors } from "hono/cors";
 import { SyncRoom } from "./sync-room";
 
@@ -12,16 +12,14 @@ type Bindings = {
   SYNC_ROOM: DurableObjectNamespace<SyncRoom>;
 };
 
-type SyncOperation = {
+type SyncMutation = {
+  id: string;
   type: "create" | "update" | "delete";
-  issueId: string;
-  data?: {
-    title?: string;
-    description?: string;
-    status?: "open" | "in_progress" | "resolved" | "closed";
-    priority?: "low" | "medium" | "high" | "urgent";
-    updatedAt?: string;
-  };
+  entity: "issue" | "comment";
+  targetId: string;
+  baseVersion: number;
+  userId: string;
+  data?: Record<string, any>;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -37,16 +35,14 @@ app.use(
   }),
 );
 
-app.get("/", (c) => {
-  return c.text("hello hehe");
-});
-
 app.get("/sync/ws", async (c) => {
   const roomId = c.req.query("roomId") ?? "global";
   const id = c.env.SYNC_ROOM.idFromName(roomId);
   const stub = c.env.SYNC_ROOM.get(id);
 
-  return stub.fetch(c.req.raw);
+  const url = new URL(c.req.raw.url);
+  url.pathname = "/sync/ws";
+  return stub.fetch(new Request(url.toString(), c.req.raw));
 });
 
 app.get("/sync/pull", async (c) => {
@@ -54,67 +50,148 @@ app.get("/sync/pull", async (c) => {
   const lastPulledAt = c.req.query("lastPulledAt");
   const timestamp = lastPulledAt ? new Date(lastPulledAt) : new Date(0);
 
-  const changedIssues = await db.select().from(issues).where(gt(issues.updatedAt, timestamp));
+  const [changedIssues, changedComments, recentActivity] = await Promise.all([
+    db.select().from(issues).where(gt(issues.updatedAt, timestamp)),
+    db.select().from(issueComments).where(gt(issueComments.updatedAt, timestamp)),
+    db.select().from(activityLogs).where(gt(activityLogs.createdAt, timestamp)),
+  ]);
 
   return c.json({
     issues: changedIssues,
+    comments: changedComments,
+    activity: recentActivity,
     timestamp: new Date().toISOString(),
   });
 });
 
 app.post("/sync/push", async (c) => {
   const db = drizzle(c.env.DB);
-  const { mutations } = await c.req.json<{ mutations: SyncOperation[] }>();
+  const { mutations } = await c.req.json<{ mutations: SyncMutation[] }>();
   const now = new Date();
+  const conflicts: Array<{ mutationId: string; serverState: any }> = [];
 
   for (const op of mutations) {
-    if (op.type === "create" && op.data) {
-      await db
-        .insert(issues)
-        .values({
-          id: op.issueId,
-          title: op.data.title ?? "Untitled",
-          description: op.data.description,
-          status: op.data.status ?? "open",
-          priority: op.data.priority ?? "medium",
+    if (op.entity === "issue") {
+      const existing = await db.select().from(issues).where(eq(issues.id, op.targetId)).get();
+
+      if (op.type === "create") {
+        await db
+          .insert(issues)
+          .values({
+            id: op.targetId,
+            title: op.data?.title ?? "Untitled",
+            description: op.data?.description,
+            status: op.data?.status ?? "open",
+            priority: op.data?.priority ?? "medium",
+            position: op.data?.position ?? 0,
+            labels: op.data?.labels ?? [],
+            createdById: op.userId,
+            updatedById: op.userId,
+            version: 1,
+            deletedAt: null,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .onConflictDoUpdate({
+            target: issues.id,
+            set: {
+              title: op.data?.title ?? "Untitled",
+              description: op.data?.description,
+              status: op.data?.status ?? "open",
+              priority: op.data?.priority ?? "medium",
+              position: op.data?.position ?? 0,
+              labels: op.data?.labels ?? [],
+              updatedById: op.userId,
+              version: sql`${issues.version} + 1`,
+              deletedAt: null,
+              updatedAt: now,
+            },
+          });
+
+        await db.insert(activityLogs).values({
+          id: crypto.randomUUID(),
+          issueId: op.targetId,
+          userId: op.userId,
+          action: "created",
+          details: op.data,
+          createdAt: now,
+        });
+      } else if (op.type === "update") {
+        if (!existing) continue;
+
+        if (existing.version !== op.baseVersion) {
+          conflicts.push({ mutationId: op.id, serverState: existing });
+        }
+
+        const mergedData = {
+          title: op.data?.title ?? existing.title,
+          description:
+            op.data?.description !== undefined ? op.data.description : existing.description,
+          status: op.data?.status ?? existing.status,
+          priority: op.data?.priority ?? existing.priority,
+          position: op.data?.position ?? existing.position,
+          labels: op.data?.labels ?? existing.labels,
+        };
+
+        await db
+          .update(issues)
+          .set({
+            ...mergedData,
+            updatedById: op.userId,
+            version: sql`${issues.version} + 1`,
+            updatedAt: now,
+          })
+          .where(eq(issues.id, op.targetId));
+
+        await db.insert(activityLogs).values({
+          id: crypto.randomUUID(),
+          issueId: op.targetId,
+          userId: op.userId,
+          action: "updated",
+          details: op.data,
+          createdAt: now,
+        });
+      } else if (op.type === "delete") {
+        await db
+          .update(issues)
+          .set({
+            deletedAt: now,
+            updatedById: op.userId,
+            version: sql`${issues.version} + 1`,
+            updatedAt: now,
+          })
+          .where(eq(issues.id, op.targetId));
+
+        await db.insert(activityLogs).values({
+          id: crypto.randomUUID(),
+          issueId: op.targetId,
+          userId: op.userId,
+          action: "deleted",
+          createdAt: now,
+        });
+      }
+    } else if (op.entity === "comment") {
+      if (op.type === "create") {
+        await db.insert(issueComments).values({
+          id: op.targetId,
+          issueId: op.data?.issueId,
+          authorId: op.userId,
+          authorName: op.data?.authorName ?? "Anonymous",
+          body: op.data?.body ?? "",
           version: 1,
-          deletedAt: null,
           createdAt: now,
           updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: issues.id,
-          set: {
-            title: op.data.title ?? "Untitled",
-            description: op.data.description,
-            status: op.data.status ?? "open",
-            priority: op.data.priority ?? "medium",
-            version: sql`${issues.version} + 1`,
-            deletedAt: null,
-            updatedAt: now,
-          },
         });
-    } else if (op.type === "update" && op.data) {
-      await db
-        .update(issues)
-        .set({
-          ...(op.data.title !== undefined ? { title: op.data.title } : {}),
-          ...(op.data.description !== undefined ? { description: op.data.description } : {}),
-          ...(op.data.status !== undefined ? { status: op.data.status } : {}),
-          ...(op.data.priority !== undefined ? { priority: op.data.priority } : {}),
-          version: sql`${issues.version} + 1`,
-          updatedAt: now,
-        })
-        .where(eq(issues.id, op.issueId));
-    } else if (op.type === "delete") {
-      await db
-        .update(issues)
-        .set({
-          deletedAt: now,
-          version: sql`${issues.version} + 1`,
-          updatedAt: now,
-        })
-        .where(eq(issues.id, op.issueId));
+      } else if (op.type === "delete") {
+        await db
+          .update(issueComments)
+          .set({
+            deletedAt: now,
+            version: sql`${issueComments.version} + 1`,
+            updatedAt: now,
+          })
+          .where(eq(issueComments.id, op.targetId));
+      }
     }
   }
 
@@ -131,7 +208,7 @@ app.post("/sync/push", async (c) => {
     }),
   });
 
-  return c.json({ success: true, timestamp: now.toISOString() });
+  return c.json({ success: true, timestamp: now.toISOString(), conflicts });
 });
 
 export default app;
