@@ -51,6 +51,10 @@ export function useTaskBoard() {
 
   const triggerSync = async () => {
     if (!isOnline.value || !import.meta.client) return;
+    // A push is already in flight (likely a WebSocket sync_available echo).
+    // The in-flight push's onSuccess will pull afterwards, so skip this call.
+    if (pushMutation.isPending.value) return;
+
     const db = await initDB();
     const mutations = await db.getAll("mutations");
     if (mutations.length > 0) {
