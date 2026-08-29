@@ -1,6 +1,6 @@
 import { useQuery, useMutation, type QueryObserverResult } from "@tanstack/vue-query";
 import type { Ref } from "vue";
-import type { MutationRecord, Task } from "~/typings";
+import { ApiError, type MutationRecord, type Task } from "~/typings";
 import { BASE_API_URL, initDB, loadLocalState } from "~/utils";
 
 export const pushMut = (
@@ -8,6 +8,8 @@ export const pushMut = (
   localTasks: Ref<Task[]>,
   refetchPull: () => Promise<QueryObserverResult<any, Error>>,
 ) => {
+  const toast = useToast();
+
   return useMutation({
     mutationFn: async (mutations: MutationRecord[]) => {
       const res = await fetch(BASE_API_URL + "/sync/push", {
@@ -17,7 +19,11 @@ export const pushMut = (
         },
         body: JSON.stringify({ mutations }),
       });
-      if (!res.ok) throw new Error("Push failed");
+
+      if (!res.ok) {
+        throw new ApiError("Push failed", res.status);
+      }
+
       return res.json();
     },
     onSuccess: async (_, variables) => {
@@ -43,6 +49,19 @@ export const pushMut = (
       await tx.done;
       await loadLocalState(pendingMutationsCount, localTasks);
       await refetchPull();
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 429) {
+        toast.add({
+          title: "Rate Limited",
+          color: "error",
+          description: "You are being rate limited, aww :(",
+        });
+        console.log("Rate Limited");
+        return;
+      }
+
+      console.log(err);
     },
   });
 };

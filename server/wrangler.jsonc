@@ -27,4 +27,15 @@
       "new_sqlite_classes": ["SyncRoom"],
     },
   ],
+
+  "ratelimits": [
+    {
+      "name": "API_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 150,
+        "period": 60,
+      },
+    },
+  ],
 }

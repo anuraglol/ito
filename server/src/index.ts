@@ -10,6 +10,7 @@ export { SyncRoom };
 type Bindings = {
   DB: D1Database;
   SYNC_ROOM: DurableObjectNamespace<SyncRoom>;
+  API_RATE_LIMITER: RateLimit;
 };
 
 type SyncMutation = {
@@ -75,6 +76,20 @@ app.post("/sync/push", async (c) => {
   const conflicts: Array<{ mutationId: string; serverState: any }> = [];
 
   for (const op of mutations) {
+    const { success } = await c.env.API_RATE_LIMITER.limit({
+      key: op.userId,
+    });
+
+    if (!success) {
+      return c.json(
+        {
+          error: "rate_limit_exceeded",
+          message: "Too many requests",
+        },
+        429,
+      );
+    }
+
     if (op.entity === "issue") {
       const existing = await db.select().from(issues).where(eq(issues.id, op.targetId)).get();
 
