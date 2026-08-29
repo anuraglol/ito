@@ -15,6 +15,7 @@ export function useCreateTask() {
   const { currentUser, pendingMutationsCount, localTasks, isOnline, triggerSync } = useTaskBoard();
 
   return useMutation({
+    networkMode: "always",
     mutationFn: async (payload: CreateTaskInput) => {
       const issueId = crypto.randomUUID();
       const primaryTag = payload.tags?.[0] ?? payload.priority;

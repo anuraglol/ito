@@ -1,9 +1,12 @@
 import type { Task } from "@/typings";
+import { useOnline } from "@vueuse/core";
 import { getIssuesQuery, pushMut } from "~/composables/queries";
 import { useSyncSocket } from "~/composables/useSyncSocket";
 import { columnToStatusMap, initDB, loadLocalState, mutateLocal, statusToColumnMap } from "~/utils";
 
 export function useTaskBoard() {
+  const isOnline = useOnline();
+
   const currentUser = useState("current-user", () => ({
     userId: "",
     name: "Anonymous",
@@ -28,9 +31,6 @@ export function useTaskBoard() {
     currentUser.value = newUser;
   };
 
-  const isOnline = useState<boolean>("is-online", () =>
-    import.meta.client ? navigator.onLine : true,
-  );
   const pendingMutationsCount = useState<number>("pending-mutations-count", () => 0);
   const isCreateModalOpen = useState<boolean>("is-create-modal-open", () => false);
   const draggedItem = useState<{ columnId: string; item: Task } | null>("dragged-item", () => null);
@@ -217,21 +217,19 @@ export function useTaskBoard() {
     emitCursor(e.clientX, e.clientY);
   };
 
-  const initBoard = async () => {
-    setupUser();
-    isOnline.value = navigator.onLine;
-    await loadLocalState(pendingMutationsCount, localTasks);
-
-    window.addEventListener("online", () => {
-      isOnline.value = true;
+  watch(isOnline, (online) => {
+    if (!import.meta.client) return;
+    if (online) {
       triggerSync();
       connectSocket();
-    });
-
-    window.addEventListener("offline", () => {
-      isOnline.value = false;
+    } else {
       disconnectSocket();
-    });
+    }
+  });
+
+  const initBoard = async () => {
+    setupUser();
+    await loadLocalState(pendingMutationsCount, localTasks);
 
     if (isOnline.value) {
       triggerSync();
