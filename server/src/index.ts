@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { drizzle } from "drizzle-orm/d1";
 import { issues, issueComments, activityLogs } from "./db/schema";
-import { eq, gt, sql, and } from "drizzle-orm";
+import { eq, gt, sql } from "drizzle-orm";
 import { cors } from "hono/cors";
 import { SyncRoom } from "./sync-room";
 

@@ -4,7 +4,7 @@ import type { UserPresence } from "~/typings";
 export function useSyncSocket(
   isOnline: Ref<boolean>,
   triggerSync: () => Promise<void>,
-  userInfo: { userId: string; name: string; color: string },
+  currentUser: Ref<{ userId: string; name: string; color: string }>,
   roomId: string = "global",
 ) {
   let socket: WebSocket | null = null;
@@ -14,7 +14,7 @@ export function useSyncSocket(
   const presences = useState<UserPresence[]>("collaborative-presences", () => []);
 
   const connect = () => {
-    if (!import.meta.client || !isOnline.value) return;
+    if (!import.meta.client || !isOnline.value || !currentUser.value.userId) return;
     if (
       socket &&
       (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
@@ -24,9 +24,9 @@ export function useSyncSocket(
 
     const params = new URLSearchParams({
       roomId,
-      userId: userInfo.userId,
-      name: userInfo.name,
-      color: userInfo.color,
+      userId: currentUser.value.userId,
+      name: currentUser.value.name,
+      color: currentUser.value.color,
     });
 
     const protocol = BASE_API_URL.startsWith("https") ? "wss" : "ws";
@@ -50,11 +50,11 @@ export function useSyncSocket(
           await triggerSync();
         } else if (message.type === "presence") {
           presences.value = message.presences.filter(
-            (p: UserPresence) => p.userId !== userInfo.userId,
+            (p: UserPresence) => p.userId !== currentUser.value.userId,
           );
         }
       } catch {
-        // malformed frame
+        // ignore
       }
     };
 

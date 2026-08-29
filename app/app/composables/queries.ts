@@ -1,7 +1,7 @@
 import { useQuery, useMutation, type QueryObserverResult } from "@tanstack/vue-query";
 import type { Ref } from "vue";
 import type { MutationRecord, Task } from "~/typings";
-import { initDB, loadLocalState } from "~/utils";
+import { BASE_API_URL, initDB, loadLocalState } from "~/utils";
 
 export const pushMut = (
   pendingMutationsCount: Ref<number>,
@@ -68,7 +68,7 @@ export const getIssuesQuery = (
 
       const serverIssues: Task[] = data.issues;
       const pendingMutations = await db.getAll("mutations");
-      const pendingIds = new Set(pendingMutations.map((m) => m.issueId));
+      const pendingIds = new Set(pendingMutations.map((m) => m.targetId));
 
       const tx = db.transaction("issues", "readwrite");
       const store = tx.objectStore("issues");

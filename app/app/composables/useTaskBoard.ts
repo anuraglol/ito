@@ -4,27 +4,29 @@ import { useSyncSocket } from "~/composables/useSyncSocket";
 import { columnToStatusMap, initDB, loadLocalState, mutateLocal, statusToColumnMap } from "~/utils";
 
 export function useTaskBoard() {
-  const currentUser = useState("current-user", () => {
-    if (import.meta.client) {
-      const cached = localStorage.getItem("kanban_user");
-      if (cached) return JSON.parse(cached);
+  const currentUser = useState("current-user", () => ({
+    userId: "",
+    name: "Anonymous",
+    color: "#3b82f6",
+  }));
 
-      const newUser = {
-        userId: crypto.randomUUID(),
-        name: `User-${Math.floor(Math.random() * 1000)}`,
-        color: `#${Math.floor(Math.random() * 16777215)
-          .toString(16)
-          .padStart(6, "0")}`,
-      };
-      localStorage.setItem("kanban_user", JSON.stringify(newUser));
-      return newUser;
+  const setupUser = () => {
+    if (!import.meta.client) return;
+    const cached = localStorage.getItem("kanban_user");
+    if (cached) {
+      currentUser.value = JSON.parse(cached);
+      return;
     }
-    return {
-      userId: "ssr-user",
-      name: "Anonymous",
-      color: "#3b82f6",
+    const newUser = {
+      userId: crypto.randomUUID(),
+      name: `User-${Math.floor(100 + Math.random() * 900)}`,
+      color: `#${Math.floor(Math.random() * 16777215)
+        .toString(16)
+        .padStart(6, "0")}`,
     };
-  });
+    localStorage.setItem("kanban_user", JSON.stringify(newUser));
+    currentUser.value = newUser;
+  };
 
   const isOnline = useState<boolean>("is-online", () =>
     import.meta.client ? navigator.onLine : true,
@@ -63,7 +65,7 @@ export function useTaskBoard() {
     disconnect: disconnectSocket,
     emitCursor,
     presences,
-  } = useSyncSocket(isOnline, triggerSync, currentUser.value);
+  } = useSyncSocket(isOnline, triggerSync, currentUser);
 
   const handleCreateTask = (payload: Partial<Task>) => {
     const newId = crypto.randomUUID();
@@ -216,6 +218,7 @@ export function useTaskBoard() {
   };
 
   const initBoard = async () => {
+    setupUser();
     isOnline.value = navigator.onLine;
     await loadLocalState(pendingMutationsCount, localTasks);
 
