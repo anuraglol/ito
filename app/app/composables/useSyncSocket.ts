@@ -10,10 +10,12 @@ export function useSyncSocket(
   let socket: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let pingInterval: ReturnType<typeof setInterval> | null = null;
+  let manualDisconnect = false;
 
   const presences = useState<UserPresence[]>("collaborative-presences", () => []);
 
   const connect = () => {
+    manualDisconnect = false;
     if (!import.meta.client || !isOnline.value || !currentUser.value.userId) return;
     if (
       socket &&
@@ -60,7 +62,7 @@ export function useSyncSocket(
 
     socket.onclose = () => {
       cleanup();
-      if (isOnline.value) {
+      if (isOnline.value && !manualDisconnect) {
         reconnectTimer = setTimeout(connect, 3000);
       }
     };
@@ -84,6 +86,7 @@ export function useSyncSocket(
   };
 
   const disconnect = () => {
+    manualDisconnect = true;
     cleanup();
     if (socket) {
       socket.close();

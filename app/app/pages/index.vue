@@ -6,7 +6,7 @@
       title="Project Board"
       description="Manage and track tasks across different workflow stages."
     />
-
+    <InactiveDialog />
     <Item />
   </div>
 </template>
